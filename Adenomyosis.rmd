@@ -1,0 +1,838 @@
+
+---
+```{r setup, include=FALSE}
+library(knitr)
+#library(ggplot2)
+knitr::opts_chunk$set(echo = FALSE)
+knitr::opts_chunk$set(error = FALSE)
+
+```
+
+```{r load packages, echo=FALSE, message=FALSE, include=FALSE, warning=FALSE}
+require(ComplexHeatmap,quietly = T)
+require(Rtsne,quietly = T)
+require(cowplot)
+require(dplyr,quietly = T)
+require(randomForest,quietly = T)
+require(DESeq2,quietly = T)
+require(pheatmap,quietly = T)
+require(reshape2,quietly = T)
+require(ggplot2,quietly = T)
+require(ggfortify,quietly = T)
+require(RColorBrewer,quietly = T)
+require(clusterProfiler,quietly = T)
+require(ROCR,quietly = T)
+require(org.Hs.eg.db,quietly = T)
+require(data.table,quietly = T)
+library(DOSE)
+require(BiocParallel)
+library(TxDb.Hsapiens.UCSC.hg19.knownGene)
+library(org.Hs.eg.db)
+library(ChIPseeker)
+require(knitr)
+library(Boruta)
+library(pROC)
+library(ROCR)
+library(caTools)
+library(randomForest)
+require(caret)
+library(limma)
+require(tidyverse)
+library(enrichplot)
+
+
+options(expressions = 5e5)
+peakDF2GRanges <- function(peak.df) {
+  peak.gr=GRanges(seqnames=peak.df[,1],
+                  ranges=IRanges(peak.df[,2], peak.df[,3]))
+  cn <- colnames(peak.df)
+  if (length(cn) > 3) {
+    for (i in 4:length(cn)) {                             
+      mcols(peak.gr)[[cn[i]]] <- peak.df[, cn[i]]
+    }
+  }
+  return(peak.gr)
+}
+str2gr<-function(row_name){
+  downbed<-data.frame(matrix(unlist(tstrsplit(row_name, "_", fixed=TRUE)),nrow=length(row_name)),stringsAsFactors=F)
+  downbed$X2=as.numeric(downbed$X2)
+  downbed$X3=as.numeric(downbed$X3)
+  return(peakDF2GRanges(downbed))
+}
+
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene
+
+promoter <- getPromoters(TxDb=txdb, upstream=3000, downstream=3000)
+```
+
+
+```{r 5hmc plot, echo=FALSE, message=FALSE, warning=FALSE, include=FALSE}
+##########绘制5hmc分布
+
+args=c("AM","AM")
+out.path=args[1]
+proj.name=args[2]
+
+#dir.create(out.path)
+
+response.list <- read.table(paste0("data/",out.path, ".list"), header = T)
+
+```
+
+```{r warning=FALSE}
+kable(response.list, caption = "sample list")
+```
+
+```{r draw 5hmc distribution plot, echo=FALSE, message=FALSE, include=FALSE, warning=FALSE}
+# dist.res<-sapply(dir(pattern="cover.res",recursive=T),function(x){read.table(x)$V2}) 
+# getname1<-function(x){strsplit(x,"\\.")[[1]][1]}
+# 
+# names<- sapply(colnames(dist.res), getname1)
+# 
+# getname2 <-function(x){strsplit(x,'/')[[1]][2]}
+# names2<- sapply(names, getname2)
+# 
+# colnames(dist.res)<-names2
+# #response.list$temp<-as.factor(response.list$temp)
+# batch.list=response.list
+# dist.res1<-dist.res[,as.character(batch.list$name)]
+# dist.m1<-melt(dist.res1) 
+# dist.m1<-merge(dist.m1,batch.list,by.x="Var2",by.y="name") 
+# 
+# colnames(dist.m1)[2]="position"
+# #colnames(dist.m1)<-c("Sample","position","value","type","sex", "age", "batch","med")
+# #colnames(dist.m1)[9]<-"age_bin"
+# dist.mean1<-aggregate(value~position+type,dist.m1,mean) 
+# pdf(paste0("output/plot/",proj.name,"_",out.path,"_5hmC distribution.pdf"),4.5,3)
+# dist_p1<-ggplot(dist.mean1,aes(position,value,color=type))+geom_smooth(span=0.1,se=F,size=1)+ ggtitle(paste0(proj.name,"_",out.path,"5hmC distribution")) + 
+#   scale_color_manual(values=c(`non-Deficiency` = "#C8D7EB", `Deficiency` = "#F1E1C7")) + scale_x_continuous(breaks=c(0,25,50,75,100),labels=c("-2Kb","TSS","50%","TTS","-2Kb"))+labs(x="",y="RPM")+theme_minimal()+ theme_bw(base_size =14)+theme(panel.grid=element_blank()) +theme(axis.text=element_text(size=10))
+# print(dist_p1)
+# dev.off()
+
+
+```
+
+```{r}
+# print(dist_p1)
+
+```
+
+```{r loading counts, echo=FALSE, include=FALSE,warning=FALSE}
+#Loading Data
+
+fread<-function(x){read.table(x)$V5}
+#get chrname 
+cc<-read.table(dir(pattern=paste0(".",proj.name,".counts"),recursive=T)[1])
+rawdata<-as.data.frame(sapply(dir(pattern=paste0(".",proj.name,".counts"),recursive=T),fread))
+
+getname1<-function(x){strsplit(x,"\\.")[[1]][1]}
+
+names<- sapply(colnames(rawdata), getname1)
+
+getname2 <-function(x){strsplit(x,'/')[[1]][2]}
+names2<- sapply(names, getname2)
+
+
+colnames(rawdata)<-names2
+rownames(rawdata)<-paste(cc[,1],cc[,2],cc[,3],sep="_")
+
+#setwd(paste0(pwd,"/",out.path))
+resp.data<-rawdata[,as.character(response.list$name)]
+condition<-as.character(response.list$type)
+data<-resp.data
+
+
+data1<-data[!grepl('chrX',rownames(data)),] 
+data2<-data1[!grepl('chrY',rownames(data1)),]
+
+data<-data2
+saveRDS(data, "data/data.RDS")
+
+
+data.nor<-t(1000000*t(data)/colSums(data))
+rownames(data.nor) <- rownames(data)
+rawdata.nor<-t(1000000*t(rawdata)/colSums(rawdata))
+saveRDS(data.nor, "data/datanormal.RDS")
+
+coldata<-data.frame(condition=condition)
+#dds <- DESeqDataSetFromMatrix(countData = data, colData = coldata,design= ~ sex + condition)
+data <-data+1
+dds <- DESeqDataSetFromMatrix(countData = data, colData = coldata,design=~condition)
+dds$condition <- factor(dds$condition, levels = c("Healthy","Adenomyosis"))
+
+dds <- DESeq(dds)
+save(dds, file="data/dds.RData")
+#vsd <- vst(dds, blind=FALSE)
+vsd <- varianceStabilizingTransformation(dds)
+colcolor=data.frame(type=condition,row.names=colnames(data))
+colors <- colorRampPalette( rev(brewer.pal(9, "Reds")) )(255)
+sampleDists <- dist(t(assay(vsd)))
+sampleDistMatrix <- as.matrix(sampleDists)
+ann_colors = list(type = c(`Healthy` = "#669966", `Adenomyosis` = "#FF0000"))
+pheatmap(sampleDistMatrix, clustering_distance_rows=sampleDists, show_rownames=F,show_colnames=F,
+         clustering_distance_cols=sampleDists, col=colors,annotation_colors = ann_colors,
+         annotation_col=colcolor,width =5.2, height=4.0,filename=(paste0(out.path,"_","correlation.pdf")))
+
+
+
+```
+
+```{r   }
+pheatmap(sampleDistMatrix, clustering_distance_rows=sampleDists, 
+         clustering_distance_cols=sampleDists, col=colors,
+         annotation_col=colcolor)
+
+# plotPCA(vsd,intgroup=c("batch"))
+pcaData <- plotPCA(vsd, intgroup = c( "condition"), returnData = TRUE) 
+percentVar <- round(100 * attr(pcaData, "percentVar")) 
+ggplot(pcaData, aes(x = PC1, y = PC2, color = condition)) +
+  geom_point(aes(alpha = I(0.6)), size = 2.2) + # 设置点的大小和透明度
+  stat_ellipse(aes(group = condition), level = 0.9, linetype = "dotted", alpha = 0.9) + # 调整椭圆样式
+  scale_color_manual(values = c(`Healthy` = "#669966", `Adenomyosis` = "#FF0000")) +
+  theme_minimal() +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold", size = 16),
+    axis.title = element_text(face = "bold", size = 14),
+    axis.text = element_text(size = 12),
+    legend.title = element_blank(),
+    legend.key = element_blank(), # 使图例背景透明
+    legend.position = "right", # 将图例放在右侧
+    panel.grid.major = element_blank(), # 去掉主网格线
+    panel.grid.minor = element_blank(), # 去掉次网格线
+    plot.background = element_rect(fill = "white"),
+    panel.background = element_rect(fill = "white")
+  ) +
+  labs(
+    title = "PlotPCA",
+    x = paste0("PC1: ", percentVar[1], "% variance"),
+    y = paste0("PC2: ", percentVar[2], "% variance")
+  ) #+
+  #coord_fixed(ratio = 1) # 保持X和Y轴比例一致
+
+ ggsave((filename = "output/plot/PlotPCA.pdf"),width =4, height=3)
+# plotPCA(vsd,intgroup=c("sex"))
+# plotPCA(vsd,intgroup=c("chemo"))
+
+ pca <- prcomp(t(assay(vsd)), scale=TRUE)
+pca.var <- pca$sdev^2  
+pca.var.per <- round(pca.var/sum(pca.var)*100, 1)  
+pca.data <- data.frame(Sample=rownames(pca$x),
+                       PC1=pca$x[,1],
+                       PC2=pca$x[,2])
+pca.data$group <- as.character(response.list[match(rownames(pca.data), response.list$name),"type"])
+
+pca_plot <- ggplot(data=pca.data,aes(x=PC1,y=PC2,color=group,shape=group))+
+  geom_point(size=3)+
+  theme_bw()+
+  xlab(paste("PC1(",pca.var.per[1],"%","variance)",sep=""))+
+  ylab(paste("PC2(",pca.var.per[2],"%","variance)",sep=""))+
+  theme(legend.position = c(0.80,0.9)) + ggrepel::geom_text_repel(aes(label=Sample) )
+pca_plot 
+ggsave((filename = "output/plot/PlotPCA_with_name.pdf"),width =20, height=20)
+#assay(vsd) %>%as_tibble()
+#ggsave((filename = "PlotPCA2.pdf"),width =45, height=45)
+
+#vsd1<-vsd
+#assay(vsd)<-limma::removeBatchEffect(assay(vsd),response.list$sex)
+#assay(vsd)<-limma::removeBatchEffect(assay(vsd),response.list$batch)
+
+
+#data.nor<-as.data.frame(assay(vsd))
+
+
+#plotPCA(vsd1,intgroup=c("sex"))
+
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+resA_B<-results(dds,alpha=0.05)
+write.table(resA_B@elementMetadata$description,"resA_B.info.txt")
+summary(resA_B)
+write.csv(resA_B,"diff.csv")
+res_FD1_p001<-as.data.frame(resA_B,row.names=rownames(resA_B)) %>% tibble::rownames_to_column() %>% filter(baseMean>15) %>% mutate(regulate=ifelse(abs(log2FoldChange)>0.5 & pvalue<0.05, ifelse(log2FoldChange>0,"up","down"), "no"))
+
+
+txdb <- TxDb.Hsapiens.UCSC.hg19.knownGene
+
+
+up_gene_numbers <- dim(res_FD1_p001 %>% dplyr::filter(regulate =="up"))[1]
+down_gene_numbers <- dim(res_FD1_p001 %>% dplyr::filter(regulate =="down"))[1]
+
+
+
+p<-ggplot(res_FD1_p001,aes(log2FoldChange,-log10(pvalue),color=regulate))+geom_point()+coord_cartesian(xlim=c(-max(res_FD1_p001$log2FoldChange),max(res_FD1_p001$log2FoldChange)))+scale_color_manual(values = c("sky blue","black","orange"))+theme_minimal(base_size = 16)+
+  geom_vline(xintercept=c(-0.5,0.5),lty=10,col="grey",lwd=1.2)+
+  geom_hline(yintercept = -log10(0.05),lty=10,col="grey",lwd=1.2)+
+  labs(x="log2 (Fold Change)",y="-log10 (P-value)",title="Volcano Plot") + theme_minimal() + theme_bw(base_size = 16)+theme(panel.grid=element_blank())
+
+p1 <- p + 
+    annotate('text', size = 6 ,label = paste0("Up genes"),  1,5.5) +
+    annotate('text', size = 6, label = paste0("Down genes"), -1,5.5)
+#p1 <- p + 
+    #annotate('text', size = 6 ,label = paste0("Up genes: ", up_gene_numbers), 0.7,25) +
+    #annotate('text', size = 6, label = paste0("Down genes: ", down_gene_numbers), -0.7,25)
+    
+print(p1)
+pdf("output/plot/volcano.pdf",6,4)
+print(p1)
+dev.off()
+#res_FD1_p001<-as.data.frame(resA_B,row.names=rownames(resA_B)) %>% tibble::rownames_to_column() %>% filter(baseMean>15) %>% mutate(regulate=ifelse(abs(log2FoldChange)>1 & pvalue<0.01, ifelse(log2FoldChange>0,"up","down"), "no"))
+#volcano_p1<-ggplot(res_FD1_p001,aes(log2FoldChange,-log10(pvalue),color=regulate))+geom_point()+coord_cartesian(xlim=c(-max(res_FD1_p001$log2FoldChange),max(res_FD1_p001$log2FoldChange)))+scale_color_manual(values = c("blue","grey","red"))+theme_minimal()
+
+#pdf("volcano.pdf",7,10)
+#print(volcano_p1)
+#dev.off()
+
+res_p005<-as.data.frame(resA_B,row.names=rownames(resA_B)) %>% tibble::rownames_to_column() %>% filter(pvalue<0.05) %>% mutate(group_1fc=ifelse(log2FoldChange>0, "up", "down"),group_2fc=ifelse(abs(log2FoldChange)>1, ifelse(log2FoldChange>0,"up","down"), "no"))
+#res_p001<-as.data.frame(resA_B,row.names=rownames(resA_B)) %>% tibble::rownames_to_column() %>% filter(pvalue<0.01) %>% mutate(group_1fc=ifelse(log2FoldChange>0, "up", "down"),group_2fc=ifelse(abs(log2FoldChange)>1, ifelse(log2FoldChange>0,"up","down"), "no"))
+
+```
+
+```{r }
+
+message("pvalue<0.05,fold change >0")
+table(res_p005$group_1fc)
+message("pvalue<0.05,fold change >0.5")
+table(res_p005$group_1fc)
+message("pvalue<0.05,fold change >1")
+table(res_p005$group_2fc)
+message("pvalue<0.01,fold change >0")
+table(res_p001$group_1fc)
+message("pvalue<0.01,fold change >0.5")
+table(res_p001$group_1fc)
+message("pvalue<0.01,fold change >1")
+table(res_p001$group_2fc)
+```
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+resSigdown<-subset(resA_B,log2FoldChange < -1 & padj<0.05)
+write.csv(resSigdown,"resA_B.down.csv")
+resSigup<-subset(resA_B,log2FoldChange > 1 & padj<0.05)
+write.csv(resSigup,"resA_B.up.csv")
+
+if(nrow(resSigdown)<50 || nrow(resSigup)<50){
+message("log2FoldChange < 0 & pvalue<0.01")
+resSigdown<-subset(resA_B,log2FoldChange < -0.5 & pvalue<0.01)
+write.csv(resSigdown,"resA_B.nosig.down.csv")
+message("log2FoldChange > 0 & pvalue<0.01")
+resSigup<-subset(resA_B,log2FoldChange > 0.5 & pvalue<0.01)
+write.csv(resSigup,"resA_B.nosig.up.csv")
+}
+message("pvalue<0.01,fold change >0.5; pvalue<0.01,fold change < -0.5 ")
+cat(paste("Up pvalue<0.01,LFC >0.5", nrow(resSigup)))
+cat(paste( "Down pvalue<0.01,LFC < -0.5", nrow(resSigdown)))  
+
+resSig<-rbind(resSigup,resSigdown)
+cat(paste( "total p<-0.01, abs(lfc) > 0.5", nrow(resSig)))  
+
+
+resSigdown<-subset(resA_B,log2FoldChange < -0.3 & pvalue<0.05)
+write.csv(resSigdown,"resA_B.down.csv")
+resSigup<-subset(resA_B,log2FoldChange > 0.3 & pvalue<0.05)
+write.csv(resSigup,"resA_B.up.csv")
+resSig<-rbind(resSigup,resSigdown)
+cat(paste( "total p<-0.05, abs(lfc) > 0.3", nrow(resSig)))  
+
+#markers<-rownames(subset(resA_B,abs(log2FoldChange) > 1 & pvalue<0.01))
+#if(length(markers)>200){
+#    markers<-rownames(resSig[c(order(resSig$log2FoldChange)[1:50],order(resSig$log2FoldChange,decreasing=T)[1:50]),])
+#}
+markers <- as.data.frame(resA_B,row.names=rownames(resA_B)) %>% tibble::rownames_to_column() %>% filter(pvalue<0.05) %>% top_n(300,abs(log2FoldChange))
+
+# annotation_col=data.frame(type =response.list$type,high_low = response.list$high_low, sex=response.list$sex,chemo =response.list$chemo, row.names=colnames(data.nor))
+
+##annotation_col=data.frame(type =response.list$type)
+
+##ann_colors = list(
+## type = c(Con="#3CB371", STA="#FF0000"))
+
+
+
+
+ #ann_colors = list(
+   #type = c(PDSD="#F68181", PRCR="#1AC8DB"),
+   #sex = c(`F`="#F8EA8C", `M`="#3CACAE"), 
+   #batch = c(`1`= "#674A32" , `2`= "#9B825D", `3`="#BDB9AA", `4`="#6B6C6A"))
+
+ #colors <- colorRampPalette(c("#000000", "white", "#e3722a"))(100)
+ #pheatmap(data.nor[markers$rowname,],annotation_col=annotation_col, annotation_colors = ann_colors,
+          #scale="row",show_rownames=F,show_colnames=F, cluster_cols  = TRUE,
+          #breaks=seq(-1.5,1.5,length.out=100), treeheight_row = 0,height = 15, width=10)
+ 
+ #pheatmap(data.nor[markers$rowname,],annotation_col=annotation_col, annotation_colors = ann_colors,
+          #scale="row",show_rownames=F,show_colnames=F, cluster_cols  = TRUE,
+          #breaks=seq(-1.5,1.5,length.out=100), treeheight_row = 0,height = 15, width=10, 
+          #filename="top200_FC1_pvale0.01.heatmap.pdf")
+
+##pheatmap(data.nor[markers$rowname,],annotation_col=colcolor,scale="row",show_rownames=F,breaks=seq(-2,2,length.out=100))
+
+##pheatmap(data.nor[markers$rowname,],annotation_col=colcolor,scale="row",show_rownames=F,breaks=seq(-2,2,length.out=100),clustering_method ="ward.D",
+         ##filename="top200_FC1_pvale0.01.heatmap.pdf")
+markers <- rbind(
+  as.data.frame(resA_B,row.names=rownames(resA_B)) %>% tibble::rownames_to_column() %>% filter(pvalue<0.05) %>% top_n(40,log2FoldChange),
+as.data.frame(resA_B,row.names=rownames(resA_B)) %>% tibble::rownames_to_column() %>% filter(pvalue<0.05) %>% top_n(40,-log2FoldChange)
+  )
+
+
+annotation_col=data.frame(type =response.list$type,row.names=colnames(data.nor))
+
+#label color
+ann_colors = list(type = c(`Healthy` = "#669966", `Adenomyosis` = "#FF0000"))
+
+#matrix color
+colors <- colorRampPalette(c("#78bcbc", "white", "#b47aaf"))(100)
+#colors <- colorRampPalette(c("#6ea7ce", "white", "#ce2a2a"))(100)
+pheatmap(data.nor[markers$rowname,],annotation_col=annotation_col, annotation_colors = ann_colors,
+         scale="row",show_rownames=F,show_colnames=F, cluster_cols  = TRUE,color=colors,
+         breaks=seq(-1,1,length.out=100),clustering_method ="ward.D2", treeheight_row = 0,height =5, width=5)
+
+pheatmap(data.nor[markers$rowname,],annotation_col=annotation_col, annotation_colors = ann_colors,
+         scale="row",show_rownames=F,show_colnames=F, cluster_cols  = TRUE,color=colors,cluster_rows = T,
+         breaks=seq(-2,2,length.out=100),clustering_method ="ward.D2", treeheight_row = 0,height =5, width=4, 
+         filename="output/plot/top2000_FC1_pvalue0.01.heatmap.pdf")
+
+pheatmap(data.nor[markers$rowname,],annotation_col=annotation_col, annotation_colors = ann_colors,
+         scale="row",show_rownames=F,show_colnames=T, cluster_cols  = TRUE,color=colors,
+         breaks=seq(-2,2,length.out=100),clustering_method ="ward.D", treeheight_row = 0,height =5, width=30, 
+         filename="top200_FC1_pvalue0.01withname.heatmap.pdf")
+
+
+
+```
+
+```{r, echo=FALSE, message=FALSE, include=FALSE, warning=FALSE}
+resSig50<-as.data.frame(resSig,row.names=rownames(resSig)) %>% tibble::rownames_to_column() %>% filter(pvalue<0.05) %>% top_n(50,abs(log2FoldChange))
+resSig100<-as.data.frame(resSig,row.names=rownames(resSig)) %>% tibble::rownames_to_column() %>% filter(pvalue<0.05) %>% top_n(100,abs(log2FoldChange))
+write.table(resSig50,"resA_B.top50.xls",sep="\t",quote=F,row.names=T,col.names=T)
+write.table(resSig100,"resA_B.top100.xls",sep="\t",quote=F,row.names=T,col.names=T)
+
+allbed<-data.frame(matrix(unlist(tstrsplit(rownames(resA_B), "_", fixed=TRUE)),nrow=nrow(resA_B)),stringsAsFactors=F)
+allbed$X2<-as.numeric(allbed$X2)
+allbed$X3<-as.numeric(allbed$X3)
+peak.gr=GRanges(seqnames=allbed[,1],ranges=IRanges(allbed[,2],allbed[,3]),log2FoldChange=resA_B$log2FoldChange,pvalue=resA_B$pvalue,padj=resA_B$padj)
+top50.gr<-subset(peak.gr[order(abs(peak.gr$log2FoldChange),decreasing=T),] , pvalue<0.05)[1:50,]
+top100.gr<-subset(peak.gr[order(abs(peak.gr$log2FoldChange),decreasing=T),] , pvalue<0.05)[1:100,]
+top200.gr<-subset(peak.gr[order(abs(peak.gr$log2FoldChange),decreasing=T),] , pvalue<0.05)[1:200,]
+
+top50.gr.anno <- annotatePeak(top50.gr, tssRegion=c(-3000, 3000),TxDb=txdb, annoDb="org.Hs.eg.db")
+top100.gr.anno <- annotatePeak(top100.gr, tssRegion=c(-3000, 3000),TxDb=txdb, annoDb="org.Hs.eg.db")
+top200.gr.anno <- annotatePeak(top200.gr, tssRegion=c(-3000, 3000),TxDb=txdb, annoDb="org.Hs.eg.db")
+all.gr.anno<-annotatePeak(peak.gr, tssRegion=c(-3000, 3000),TxDb=txdb, annoDb="org.Hs.eg.db")
+
+
+
+write.csv(top100.gr.anno@anno,"resA_B.top100.annotation.csv",row.names=F)
+write.csv(top50.gr.anno@anno,"resA_B.top50.annotation.csv",row.names=F)
+write.csv(all.gr.anno@anno,"all.annotation.csv",row.names=F)
+write.csv(top200.gr.anno@anno,"marker.annotation.csv",row.names=F)
+
+```
+
+```{r plot resigdown resigup and resigtotal numbers, , echo=FALSE, message=FALSE, include=FALSE, warning=FALSE}
+cat("Here is the table for pvalue < 0.05, abs(lfc) > 0.3")
+number <- data.frame("Ressigdown"  = nrow(resSigdown), "Ressigup"  = nrow(resSigup), "overall" = nrow(
+resSig) )
+
+kable(number, caption = "significant peak regions statistics")
+
+```
+
+```{r GOKEGG, echo=FALSE, message=FALSE, include=FALSE, warning=FALSE}
+downbed<-data.frame(matrix(unlist(tstrsplit(rownames(resSigdown), "_", fixed=TRUE)),nrow=nrow(resSigdown)),stringsAsFactors=F)
+downbed$X2=as.numeric(downbed$X2)
+downbed$X3=as.numeric(downbed$X3)
+#peak<-peakDF2GRanges(downbed)
+peakdown<-GRanges(seqnames=downbed[,1],ranges=IRanges(downbed[,2],downbed[,3]),log2FoldChange=resSigdown$log2FoldChange,pvalue=resSigdown$pvalue,padj=resSigdown$padj)
+peakAnnodown <- annotatePeak(peakdown, tssRegion=c(-3000, 3000),TxDb=txdb, annoDb="org.Hs.eg.db")
+pdf("output/plot/downpie.pdf", 12,7)
+plotAnnoPie(peakAnnodown)
+dev.off()
+#upsetplot(peakAnno, vennpie=TRUE)
+GOdown<-enrichGO(as.data.frame(peakAnnodown)$geneId,"org.Hs.eg.db",ont = "BP",pAdjustMethod = "none",pvalueCutoff = 0.05,qvalueCutoff = 1, readable = T)
+GOdown %>% setReadable(org.Hs.eg.db,"ENTREZID") %>% write.xlsx("down-GO.xlsx")
+KEGGdown<-enrichKEGG(as.data.frame(peakAnnodown)$geneId,organism = "hsa",pAdjustMethod = "none",pvalueCutoff = 0.05,qvalueCutoff=1)
+KEGGdown %>% setReadable(org.Hs.eg.db,"ENTREZID") %>% write.xlsx("down-KEGG.xlsx")
+KEGGdownread <- setReadable(KEGGdown, 'org.Hs.eg.db', 'ENTREZID')
+
+
+if (length(KEGGdown)>0) {
+  pdf("output/plot/downdotplot.pdf", 12,7)
+print(plot_grid(enrichplot::dotplot(GOdown),enrichplot::dotplot(KEGGdown),ncol=1))
+dev.off()
+}
+
+if (length(KEGGdown)> 0){
+pdf("output/plot/downbarplot.pdf", 12,7)
+print(plot_grid(barplot(GOdown),barplot(KEGGdown),ncol=1))
+dev.off()
+}
+
+if(nrow(GOdown)>0){
+  edoxGOdown <- setReadable(GOdown, 'org.Hs.eg.db', 'ENTREZID')
+  edoxGOdown <- pairwise_termsim(edoxGOdown)
+  fd<-resSigdown$log2FoldChange
+  names(fd)<-peakAnnodown@anno$geneId
+  pdf("output/plot/downcnetplotGO.pdf", 12,7)
+  print(cnetplot(edoxGOdown, categorySize="pvalue", foldChange=fd))
+  dev.off()
+  pdf("output/plot/downemapGO.pdf", 12,7)
+  print(emapplot(edoxGOdown))
+  dev.off()
+}
+if(nrow(KEGGdown)>0){
+  edoxKEGGdown <- setReadable(KEGGdown, 'org.Hs.eg.db', 'ENTREZID')
+  edoxKEGGdown <- pairwise_termsim(edoxKEGGdown)
+  fd<-resSigdown$log2FoldChange
+  names(fd)<-peakAnnodown@anno$geneId
+  pdf("output/plot/downcnetKEGG.pdf", 12,7)
+  print(cnetplot(edoxKEGGdown, categorySize="pvalue", foldChange=fd))
+  dev.off()
+  pdf("output/plot/downemapKEGG.pdf", 12,7)
+  print(emapplot(edoxKEGGdown))
+  dev.off()
+}
+```
+
+```{r GOKEGG2, echo=FALSE, message=FALSE, include=FALSE, warning=FALSE}
+upbed<-data.frame(matrix(unlist(tstrsplit(rownames(resSigup), "_", fixed=TRUE)),nrow=nrow(resSigup)),stringsAsFactors=F)
+upbed$X2=as.numeric(upbed$X2)
+upbed$X3=as.numeric(upbed$X3)
+#peak<-peakDF2GRanges(upbed)
+peakup<-GRanges(seqnames=upbed[,1],ranges=IRanges(upbed[,2],upbed[,3]),log2FoldChange=resSigup$log2FoldChange,pvalue=resSigup$pvalue,padj=resSigup$padj)
+peakAnnoup <- annotatePeak(peakup, tssRegion=c(-3000, 3000),TxDb=txdb, annoDb="org.Hs.eg.db")
+pdf("output/plot/uppie.pdf", 12,7)
+plotAnnoPie(peakAnnoup)
+dev.off()
+#upsetplot(peakAnno, vennpie=TRUE)
+GOup<-enrichGO(as.data.frame(peakAnnoup)$geneId,"org.Hs.eg.db",ont = "BP",pAdjustMethod = "none",pvalueCutoff = 0.05,qvalueCutoff = 1, readable = T)
+GOup %>% setReadable(org.Hs.eg.db,"ENTREZID") %>% write.xlsx("up-GO.xlsx")
+KEGGup<-enrichKEGG(as.data.frame(peakAnnoup)$geneId,organism = "hsa",pAdjustMethod = "none",pvalueCutoff = 0.05,qvalueCutoff=1)
+KEGGup %>% setReadable(org.Hs.eg.db,"ENTREZID") %>% write.xlsx("up-KEGG.xlsx")
+KEGGupread<- setReadable(KEGGup, 'org.Hs.eg.db', 'ENTREZID')
+
+
+pdf("output/plot/updotplot.pdf", 12,7)
+print(plot_grid(enrichplot::dotplot(GOup),enrichplot::dotplot(KEGGup),ncol=1))
+dev.off()
+
+pdf("output/plot/upbarplot.pdf", 12,7)
+print(plot_grid(barplot(GOup),barplot(KEGGup),ncol=1))
+dev.off()
+
+if(nrow(GOup)>0){
+  edoxGOup <- setReadable(GOup, 'org.Hs.eg.db', 'ENTREZID')
+  edoxGOup <- pairwise_termsim(edoxGOup)
+  fd<-resSigup$log2FoldChange
+  names(fd)<-peakAnnoup@anno$geneId
+  pdf("output/plot/upcnetplotGO.pdf", 12,10)
+  print(cnetplot(edoxGOup, categorySize="pvalue", foldChange=fd))
+  dev.off()
+  pdf("output/plot/upemapGO.pdf", 12,10)
+  print(emapplot(edoxGOup))
+  dev.off()
+}
+if(nrow(KEGGup)>0){
+  edoxKEGGup <- setReadable(KEGGup, 'org.Hs.eg.db', 'ENTREZID')
+  edoxKEGGup <- pairwise_termsim(edoxKEGGup)
+  fd<-resSigup$log2FoldChange
+  names(fd)<-peakAnnoup@anno$geneId
+  pdf("output/plot/upcnetKEGG.pdf", 12,7)
+  print(cnetplot(edoxKEGGup, categorySize="pvalue", foldChange=fd))
+  dev.off()
+  pdf("output/plot/upemapKEGG.pdf", 12,7)
+  print(emapplot(edoxKEGGup))
+  dev.off()
+}
+
+```
+
+```{r GOKEGG3, echo=FALSE, message=FALSE, include=FALSE, warning=FALSE}
+
+markersbed <- markers %>% as_tibble() %>% separate(into= c("X1", "X2", "X3"), rowname, sep ="_") %>% dplyr::select(X1, X2,X3)
+
+markersbed$X2=as.numeric(markersbed$X2)
+markersbed$X3=as.numeric(markersbed$X3)
+#peak<-peakDF2GRanges(upbed)
+peakmarkers<-GRanges(seqnames=markersbed$X1,ranges=IRanges(markersbed$X2,markersbed$X3),log2FoldChange=markers$log2FoldChange,pvalue=markers$pvalue,padj=markers$padj)
+
+peakAnnomarkers <- annotatePeak(peakmarkers, tssRegion=c(-3000, 3000),TxDb=txdb, annoDb="org.Hs.eg.db")
+pdf("output/plot/markerspie.pdf", 12,7)
+plotAnnoPie(peakAnnomarkers)
+dev.off()
+#upsetplot(peakAnno, vennpie=TRUE)
+GOmarkers<-enrichGO(as.data.frame(peakAnnomarkers)$geneId,"org.Hs.eg.db",ont = "BP",pAdjustMethod = "none",pvalueCutoff = 0.05,qvalueCutoff = 1, readable = T)
+KEGGmarkers<-enrichKEGG(as.data.frame(peakAnnomarkers)$geneId,organism = "hsa",pAdjustMethod = "none",pvalueCutoff = 0.05,qvalueCutoff=1)
+
+KEGGmarkersread<- setReadable(KEGGmarkers, 'org.Hs.eg.db', 'ENTREZID')
+
+
+pdf("output/plot/markersdotplot.pdf", 12,7)
+print(plot_grid(enrichplot::dotplot(GOmarkers),enrichplot::dotplot(KEGGmarkers),ncol=1))
+dev.off()
+
+pdf("output/plot/markersbarplot.pdf", 12,7)
+print(plot_grid(barplot(GOmarkers),barplot(KEGGmarkers),ncol=1))
+dev.off()
+
+if(nrow(GOmarkers)>0){
+  edoxGOmarkers <- setReadable(GOmarkers, 'org.Hs.eg.db', 'ENTREZID')
+  edoxGOmarkers <- pairwise_termsim(edoxGOmarkers)
+  fd<-markers$log2FoldChange
+  names(fd)<-peakAnnomarkers@anno$geneId
+  pdf("output/plot/markerscnetplotGO.pdf", 12,7)
+  print(cnetplot(edoxGOmarkers, categorySize="pvalue", foldChange=fd))
+  dev.off()
+  pdf("output/plot/markersemapGO.pdf", 12,7)
+  print(emapplot(edoxGOmarkers))
+  dev.off()
+}
+if(nrow(KEGGmarkers)>0){
+  edoxKEGGmarkers <- setReadable(KEGGmarkers, 'org.Hs.eg.db', 'ENTREZID')
+  edoxKEGGmarkers <- pairwise_termsim(edoxKEGGmarkers)
+  fd<-markers$log2FoldChange
+  names(fd)<-peakAnnomarkers@anno$geneId
+  pdf("output/plot/markerscnetKEGG.pdf", 12,7)
+  print(cnetplot(edoxKEGGmarkers, categorySize="pvalue", foldChange=fd))
+  dev.off()
+  pdf("output/plot/markersemapKEGG.pdf", 12,7)
+  print(emapplot(edoxKEGGmarkers))
+  dev.off()
+}
+
+```
+
+```{r GOKEGG4, echo=FALSE, message=FALSE, include=FALSE, warning=FALSE}
+allbed<-data.frame(matrix(unlist(tstrsplit(rownames(resSig), "_", fixed=TRUE)),nrow=nrow(resSig)),stringsAsFactors=F)
+allbed$X2=as.numeric(allbed$X2)
+allbed$X3=as.numeric(allbed$X3)
+#peak<-peakDF2GRanges(allbed)
+peakall<-GRanges(seqnames=allbed[,1],ranges=IRanges(allbed[,2],allbed[,3]),log2FoldChange=resSig$log2FoldChange,pvalue=resSig$pvalue,padj=resSig$padj)
+peakAnnoall <- annotatePeak(peakall, tssRegion=c(-3000, 3000),TxDb=txdb, annoDb="org.Hs.eg.db")
+pdf("output/plot/allpie.pdf", 12,7)
+plotAnnoPie(peakAnnoall)
+dev.off()
+#allsetplot(peakAnno, vennpie=TRUE)
+GOall<-enrichGO(as.data.frame(peakAnnoall)$geneId,"org.Hs.eg.db",ont = "BP",pAdjustMethod = "none",pvalueCutoff = 0.05,qvalueCutoff = 1, readable = T)
+
+library(R.utils)
+R.utils::setOption("clusterProfiler.download.method",'auto') 
+KEGGall<-enrichKEGG(as.data.frame(peakAnnoall)$geneId,organism = "hsa",pAdjustMethod = "none",pvalueCutoff = 0.05,qvalueCutoff=1)
+
+KEGGallread<- setReadable(KEGGall, 'org.Hs.eg.db', 'ENTREZID')
+
+
+pdf("output/plot/alldotplot.pdf", 12,7)
+print(plot_grid(enrichplot::dotplot(GOall),enrichplot::dotplot(KEGGall),ncol=1))
+dev.off()
+
+pdf("output/plot/allbarplot.pdf", 12,7)
+print(plot_grid(barplot(GOall),barplot(KEGGall),ncol=1))
+dev.off()
+
+if(nrow(GOall)>0){
+  edoxGOall <- setReadable(GOall, 'org.Hs.eg.db', 'ENTREZID')
+  edoxGOall <- pairwise_termsim(edoxGOall)
+  fd<-resSig$log2FoldChange
+  names(fd)<-peakAnnoall@anno$geneId
+  pdf("output/plot/allcnetplotGO.pdf", 12,7)
+  print(cnetplot(edoxGOall, categorySize="pvalue", foldChange=fd))
+  dev.off()
+  pdf("output/plot/allemapGO.pdf", 12,7)
+  print(emapplot(edoxGOall))
+  dev.off()
+}
+if(nrow(KEGGall)>0){
+  edoxKEGGall <- setReadable(KEGGall, 'org.Hs.eg.db', 'ENTREZID')
+  edoxKEGGall <- pairwise_termsim(edoxKEGGall)
+  fd<-resSig$log2FoldChange
+  names(fd)<-peakAnnoall@anno$geneId
+  pdf("output/plot/allcnetKEGG.pdf", 12,7)
+  print(cnetplot(edoxKEGGall, categorySize="pvalue", foldChange=fd))
+  dev.off()
+  pdf("output/plot/allemapKEGG.pdf", 12,7)
+  print(emapplot(edoxKEGGall))
+  dev.off()
+}
+
+```
+
+### Annotation for DOWN regulated regions
+```{r show plot, fig.width=12,fig.height=6,error=TRUE}
+plotAnnoPie(peakAnnodown)
+print(plot_grid(enrichplot::dotplot(GOdown),enrichplot::dotplot(KEGGdown),ncol=1))
+print(plot_grid(barplot(GOdown),barplot(KEGGdown),ncol=1))
+
+if(nrow(GOdown)>0){
+  edoxGOdown <- setReadable(GOdown, 'org.Hs.eg.db', 'ENTREZID')
+  edoxGOdown <- pairwise_termsim(edoxGOdown)
+  fd<-resSigdown$log2FoldChange
+  names(fd)<-peakAnnodown@anno$geneId
+  print(cnetplot(edoxGOdown, categorySize="pvalue", foldChange=fd))
+  print(emapplot(edoxGOdown))
+}
+if(nrow(KEGGdown)>0){
+  edoxKEGGdown <- setReadable(KEGGdown, 'org.Hs.eg.db', 'ENTREZID')
+  edoxKEGGdown <- pairwise_termsim(edoxKEGGdown)
+  fd<-resSigdown$log2FoldChange
+  names(fd)<-peakAnnodown@anno$geneId
+  print(cnetplot(edoxKEGGdown, categorySize="pvalue", foldChange=fd))
+  print(emapplot(edoxKEGGdown))
+}
+```
+
+### Annotation for UP regulated regions
+```{r show plot2, fig.width=12,fig.height=6,error=TRUE}
+plotAnnoPie(peakAnnoup)
+print(plot_grid(enrichplot::dotplot(GOup),enrichplot::dotplot(KEGGup),ncol=1))
+print(plot_grid(barplot(GOup),barplot(KEGGup),ncol=1))
+if(nrow(GOup)>0){
+  edoxGOup <- setReadable(GOup, 'org.Hs.eg.db', 'ENTREZID')
+  edoxGOup <- pairwise_termsim(edoxGOup)
+  fd<-resSigup$log2FoldChange
+  names(fd)<-peakAnnoup@anno$geneId
+  print(cnetplot(edoxGOup, categorySize="pvalue", foldChange=fd))
+  print(emapplot(edoxGOup))
+}
+if(nrow(KEGGup)>0){
+  edoxKEGGup <- setReadable(KEGGup, 'org.Hs.eg.db', 'ENTREZID')
+  edoxKEGGup <- pairwise_termsim(edoxKEGGup)
+  fd<-resSigup$log2FoldChange
+  names(fd)<-peakAnnoup@anno$geneId
+  print(cnetplot(edoxKEGGup, categorySize="pvalue", foldChange=fd))
+  print(emapplot(edoxKEGGup))
+}
+
+```
+
+
+### Annotation for ResSigall
+```{r show plot4, fig.width=12,fig.height=6,error=TRUE}
+plotAnnoPie(peakAnnoall)
+print(plot_grid(enrichplot::dotplot(GOall),enrichplot::dotplot(KEGGall),ncol=1))
+print(plot_grid(barplot(GOall),barplot(KEGGall),ncol=1))
+if(nrow(GOall)>0){
+  edoxGOall <- setReadable(GOall, 'org.Hs.eg.db', 'ENTREZID')
+  edoxGOall <- pairwise_termsim(edoxGOall)
+  fd<-resSig$log2FoldChange
+  names(fd)<-peakAnnoall@anno$geneId
+  print(cnetplot(edoxGOall, categorySize="pvalue", foldChange=fd))
+  print(emapplot(edoxGOall))
+}
+if(nrow(KEGGall)>0){
+  edoxKEGGall <- setReadable(KEGGall, 'org.Hs.eg.db', 'ENTREZID')
+  edoxKEGGall <- pairwise_termsim(edoxKEGGall)
+  fd<-resSig$log2FoldChange
+  names(fd)<-peakAnnoall@anno$geneId
+  print(cnetplot(edoxKEGGall, categorySize="pvalue", foldChange=fd))
+  print(emapplot(edoxKEGGall))
+}
+
+```
+
+
+### Annotation for markers200
+```{r show plot3, fig.width=12,fig.height=6,error=TRUE}
+plotAnnoPie(peakAnnomarkers)
+print(plot_grid(enrichplot::dotplot(GOmarkers),enrichplot::dotplot(KEGGmarkers),ncol=1))
+print(plot_grid(barplot(GOmarkers),barplot(KEGGmarkers),ncol=1))
+if(nrow(GOmarkers)>0){
+  edoxGOmarkers <- setReadable(GOmarkers, 'org.Hs.eg.db', 'ENTREZID')
+  edoxGOmarkers <- pairwise_termsim(edoxGOmarkers)
+  fd<-markers$log2FoldChange
+  names(fd)<-peakAnnomarkers@anno$geneId
+  print(cnetplot(edoxGOmarkers, categorySize="pvalue", foldChange=fd))
+  print(emapplot(edoxGOmarkers))
+}
+if(nrow(KEGGmarkers)>0){
+  edoxKEGGmarkers <- setReadable(KEGGmarkers, 'org.Hs.eg.db', 'ENTREZID')
+  edoxKEGGmarkers <- pairwise_termsim(edoxKEGGmarkers)
+  fd<-markers$log2FoldChange
+  names(fd)<-peakAnnomarkers@anno$geneId
+  print(cnetplot(edoxKEGGmarkers, categorySize="pvalue", foldChange=fd))
+  print(emapplot(edoxKEGGmarkers))
+}
+
+```
+
+```{r write files, echo=FALSE, warning=FALSE,message=FALSE,error=TRUE}
+#drugs<-readRDS(paste0("drugbank.rds"))
+#drugs.info<-drugs %>% group_by(gene_name)
+#resSigdown.res<-as.data.frame(peakAnnodown@anno) %>% dplyr::rename(gene_name=SYMBOL) %>% dplyr::left_join(drugs.info,by='gene_name')
+#resSigup.res<-as.data.frame(peakAnnoup@anno) %>% dplyr::rename(gene_name=SYMBOL) %>% dplyr::left_join(drugs.info,by='gene_name')
+write.csv(GOdown@result,"resA_B.downGO.csv")
+write.csv(KEGGdownread@result,"resA_B.downKEGG.csv")
+#write.csv(resSigdown.res,"resA_B.down.annotation.csv",row.names=F)
+write.csv(GOup@result,"resA_B.upGO.csv")
+write.csv(KEGGupread@result,"resA_B.upKEGG.csv")
+#write.csv(resSigup.res,"resA_B.up.annotation.csv",row.names=F)
+save.image(file='Analysis.RData')
+write.csv(markers, "markers.csv", row.names = F)
+write.csv(GOmarkers@result,"markers.GO.csv")
+write.csv(KEGGmarkersread@result,"markers.KEGG.csv")
+write.csv(GOall@result,"allResSig.GO.csv")
+write.csv(KEGGallread@result,"allResSig.KEGG.csv")
+
+```
+
+```{r barplot for region distribution, echo=FALSE, error=TRUE, message=FALSE, warning=FALSE}
+barplot_function <- function(csvpath, name){
+  high_low = read.csv(csvpath, stringsAsFactors = FALSE)
+  
+  #
+  high_low <-high_low %>% as_tibble()
+  A = data.frame(lapply(high_low, function(x) {
+    gsub("Intron.*", "Intron", x)
+  }))
+  B = data.frame(lapply(A, function(x) {
+    gsub("Promoter.*", "Promoter", x)
+  }))
+  C= data.frame(lapply(B, function(x) {
+    gsub("Exon.*", "Exon", x)
+  }))
+  D= data.frame(lapply(C, function(x) {
+    gsub("Downstream.*", "Downstream", x)
+  }))
+  
+  D$log2FoldChange <- as.numeric(as.character(D$log2FoldChange))
+  E <-D %>% dplyr::mutate(sign = ifelse(log2FoldChange < 0, "negative", "positive")) %>% dplyr::select(log2FoldChange, annotation, sign)
+  
+  mean_lfc_pos_neg <- E %>% group_by(annotation, sign) %>% summarize(mean = mean(log2FoldChange), count= n())
+  mean_lfc_all <- E %>% dplyr::mutate(sign = "all") %>% group_by(annotation,sign) %>% summarize(mean = mean(log2FoldChange), count= n())
+  
+  #combining pos,neg, all
+  final_data <- rbind(mean_lfc_pos_neg, mean_lfc_all)
+  final_data$sign <-as.factor(final_data$sign)
+  final_data$sign <- ordered(final_data$sign, levels = c("positive", "negative", "all"))
+  final_data$annotation <- ordered(final_data$annotation, levels = c("Distal Intergenic", "Promoter", "5' UTR", "Exon" ,"Intron", "3' UTR", "Downstream"))
+  write.csv(final_data, paste0("",name, "_region_distribution.csv"))
+  
+  
+  
+  #plot
+  high_low_mean_lfc <- final_data %>% ggplot(aes(x = annotation, y = mean, fill = sign)) +
+  geom_bar(stat = "identity", position = "dodge", alpha = 0.7) +
+  geom_text(aes(label = count), 
+            position = position_dodge(width = 0.9), 
+            vjust = 0.5, 
+            color = "black",
+            size = 4) +
+  scale_fill_manual(values = c("#b47aaf", "#78bcbc", "#e5d5ad")) +
+  #ggtitle(paste0(name, "_mean_lfc region distribution")) +
+  #xlab("") + # 可以为空，但为了示例，这里给出一个默认标签
+  ylab("lfc_mean_score") +
+  theme_bw() +
+  theme(panel.grid = element_blank(), # 去掉背景网格线
+        #plot.title = element_text(hjust = 0.5, size = 14), # 标题居中显示，可调整大小
+        axis.title.x = element_text(size = 12), # X轴标题大小
+        axis.title.y = element_text(size = 12), # Y轴标题大小
+        axis.text.x = element_text(size = 10, angle = 45, hjust = 1), # X轴标签大小和旋转
+        axis.text.y = element_text(size = 10), # Y轴标签大小
+        axis.ticks = element_line(color = "black")) # 轴刻度线颜色
+  
+  ggsave(paste0("output/plot/",name, "_mean_lfc region distribution.pdf"), high_low_mean_lfc ,width = 5,height = 3.5 )
+  
+}
+
+
+barplot_function("marker.annotation.csv", "markers")
+```
